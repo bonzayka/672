@@ -1,40 +1,22 @@
 """Конфигурация и тексты бота.
 
-Секреты (токен, ID админов) лежат в .env — НЕ коммитим их в репозиторий.
-Всё, что обычно меняют (тарифы, реквизиты, тексты), — прямо в этом файле.
+Секреты вшиты прямо сюда (без .env). Всё, что обычно меняют
+(токен, админы, тарифы, реквизиты, тексты), — в этом файле.
 """
-import os
-from pathlib import Path
 
-BASE_DIR = Path(__file__).resolve().parent
+# ==================== Секреты ====================
+# Токен от @BotFather.
+# ВНИМАНИЕ: этот токен светился в публичном репозитории — если он
+# перевыпускался через /revoke, замените строку ниже на актуальный.
+BOT_TOKEN = "9142786482:AAGlH6IkMNbyd8mNBR04zmh6Y8dqClfZkUs"
 
-
-def _load_env() -> None:
-    """Читает .env рядом с config.py (простая замена python-dotenv)."""
-    env_path = BASE_DIR / ".env"
-    if not env_path.exists():
-        return
-    for raw in env_path.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        os.environ.setdefault(key.strip(), value.strip().strip("'\""))
-
-
-_load_env()
-
-# ==================== Окружение ====================
-BOT_TOKEN = os.getenv("BOT_TOKEN", "")
-
-# ID админов через запятую. Узнать свой ID: отправьте боту команду /id
-ADMIN_IDS = tuple(
-    int(x) for x in os.getenv("ADMIN_IDS", "").replace(";", ",").split(",") if x.strip()
-)
+# ID админов: им пересылаются квитанции, им доступны ✅/❌ и команда /admin.
+# Узнать свой ID: отправьте боту команду /id
+ADMIN_IDS = (6552268193, 7116116919)
 
 # file_id стикера для /start (не обязательно).
 # Хинт: переслать боту нужный стикер с админ-аккаунта — бот ответит его file_id.
-STICKER_FILE_ID = os.getenv("STICKER_FILE_ID", "").strip()
+STICKER_FILE_ID = ""
 
 
 def is_admin(user_id: int) -> bool:

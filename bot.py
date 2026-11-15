@@ -1,6 +1,6 @@
 """Бот продажи подписки: воронка, приём квитанций, админка.
 
-Запуск: python bot.py  (перед этим заполните .env — см. .env.example)
+Запуск: python bot.py  (токен, админы и тарифы — в config.py)
 
 Флоу юзера:
 /start -> выбор языка -> продолжить -> тариф -> ОПЛАТИТЬ -> реквизиты ->
@@ -23,6 +23,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import db
 from config import (
+    ADMIN_IDS,
     ADMIN_TEXTS,
     BOT_TOKEN,
     PAYMENT_DETAILS,
@@ -458,9 +459,9 @@ async def on_error(event) -> None:
 
 async def main() -> None:
     if not BOT_TOKEN:
-        raise SystemExit("❌ BOT_TOKEN не задан — заполните файл .env (шаблон: .env.example)")
+        raise SystemExit("❌ BOT_TOKEN не задан — заполните BOT_TOKEN в config.py")
     if not ADMIN_IDS:
-        log.warning("ADMIN_IDS не заданы — квитанции некому пересылать! См. .env.example")
+        log.warning("ADMIN_IDS не заданы — квитанции некому пересылать! Заполните в config.py")
 
     await db.init_db()
     bot = Bot(token=BOT_TOKEN)
