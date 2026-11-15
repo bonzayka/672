@@ -1,0 +1,12 @@
+# Секреты
+.env
+
+# База данных
+bot.db
+*.db
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
