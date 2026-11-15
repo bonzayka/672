@@ -11,6 +11,7 @@ import logging
 from datetime import datetime
 
 from aiogram import Bot, Dispatcher, F
+from aiogram.client.default import DefaultBotProperties
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandStart
 from aiogram.types import (
@@ -35,6 +36,7 @@ from config import (
     TEXTS,
     format_price,
     is_admin,
+    short_price,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -60,6 +62,10 @@ def lang_duration(tariff: dict, lang: str) -> str:
     return tariff["duration_ru" if lang == "ru" else "duration_en"]
 
 
+def lang_desc(tariff: dict, lang: str) -> str:
+    return tariff["desc_ru" if lang == "ru" else "desc_en"]
+
+
 def lang_method(lang: str) -> str:
     return PAYMENT_METHOD_RU if lang == "ru" else PAYMENT_METHOD_EN
 
@@ -77,9 +83,15 @@ async def safe_edit(message: Message, text: str, reply_markup: InlineKeyboardMar
 
 # ==================== Клавиатуры ====================
 
+_LANG_FLAGS = {"ru": "🇷🇺 Русский", "en": "🇬🇧 English"}
+
+
 def kb_language(lang: str) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.button(text=f"Language: {lang.upper()}", callback_data="switch_lang")
+    other = "en" if lang == "ru" else "ru"
+    builder.button(text=f"✦ {_LANG_FLAGS[lang]}", callback_data="noop")
+    builder.button(text=f"→ {_LANG_FLAGS[other]}", callback_data="switch_lang")
+    builder.adjust(2)
     return builder.as_markup()
 
 
@@ -92,7 +104,13 @@ def kb_continue(lang: str) -> InlineKeyboardMarkup:
 def kb_tariffs(lang: str) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for tariff in TARIFFS:
-        builder.button(text=lang_name(tariff, lang), callback_data=f"tariff:{tariff['id']}")
+        name = lang_name(tariff, lang)
+        price = short_price(tariff)
+        builder.button(
+            text=f"{name}  ·  {price}",
+            callback_data=f"tariff:{tariff['id']}",
+        )
+    builder.adjust(1)
     return builder.as_markup()
 
 
@@ -100,6 +118,7 @@ def kb_tariff_detail(lang: str, tariff_id: str) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text=t(lang, "pay_btn"), callback_data=f"pay:{tariff_id}")
     builder.button(text=t(lang, "back"), callback_data="back_to_tariffs")
+    builder.adjust(1)
     return builder.as_markup()
 
 
@@ -108,6 +127,7 @@ def kb_payment_info(lang: str, tariff_id: str) -> InlineKeyboardMarkup:
     builder.button(text=t(lang, "copy_btn"), copy_text=CopyTextButton(text=PAYMENT_DETAILS))
     builder.button(text=t(lang, "paid_btn"), callback_data=f"paid:{tariff_id}")
     builder.button(text=t(lang, "back"), callback_data=f"back_to_tariff:{tariff_id}")
+    builder.adjust(1)
     return builder.as_markup()
 
 
@@ -115,6 +135,13 @@ def kb_receipt_decision(payment_id: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text=ADMIN_TEXTS["btn_approve"], callback_data=f"approve:{payment_id}")
     builder.button(text=ADMIN_TEXTS["btn_reject"], callback_data=f"reject:{payment_id}")
+    builder.adjust(2)
+    return builder.as_markup()
+
+
+def kb_back_start(lang: str) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🏠 /start", callback_data="restart")
     return builder.as_markup()
 
 
@@ -131,6 +158,7 @@ async def cmd_start(message: Message) -> None:
         except TelegramBadRequest as e:
             log.warning("Не удалось отправить стикер (проверьте STICKER_FILE_ID): %s", e)
 
+    await message.answer(t(lang, "welcome"))
     await message.answer(t(lang, "choose_lang"), reply_markup=kb_language(lang))
 
 
@@ -139,6 +167,32 @@ async def cmd_id(message: Message) -> None:
     await db.upsert_user(message.from_user.id, message.from_user.username, message.from_user.full_name)
     lang = await db.get_lang(message.from_user.id)
     await message.answer(t(lang, "my_id", user_id=message.from_user.id))
+
+
+@dp.message(Command("help"))
+async def cmd_help(message: Message) -> None:
+    await db.upsert_user(message.from_user.id, message.from_user.username, message.from_user.full_name)
+    lang = await db.get_lang(message.from_user.id)
+    await message.answer(t(lang, "help"))
+
+
+@dp.message(Command("profile"))
+async def cmd_profile(message: Message) -> None:
+    user_id = message.from_user.id
+    await db.upsert_user(user_id, message.from_user.username, message.from_user.full_name)
+    lang = await db.get_lang(user_id)
+
+    active = await db.get_active_payment(user_id)
+    if active:
+        tariff = TARIFFS_BY_ID.get(active["tariff_id"])
+        tariff_name = lang_name(tariff, lang) if tariff else active["tariff_id"]
+        text = t(lang, "profile_active",
+                 user_id=user_id,
+                 tariff=tariff_name,
+                 expires=active["expires_at"][:10])
+    else:
+        text = t(lang, "profile_inactive", user_id=user_id)
+    await message.answer(text, reply_markup=kb_back_start(lang))
 
 
 @dp.message(Command("admin"))
@@ -152,39 +206,44 @@ async def cmd_admin(message: Message) -> None:
 async def admin_stats_text() -> str:
     stats = await db.payment_stats()
     lines = [
-        "📊 Статистика",
-        f"👥 Юзеров: {await db.count_users()}",
-        f"💰 Платежей: {stats['total']} (✅ {stats['approved']} · ❌ {stats['rejected']} · ⏳ {stats['pending']})",
+        ADMIN_TEXTS["admin_header"],
+        f"👥 <b>Юзеров:</b> {await db.count_users()}",
+        f"💰 <b>Платежей:</b> {stats['total']}",
+        f"   ✅ Одобрено: {stats['approved']}",
+        f"   ❌ Отклонено: {stats['rejected']}",
+        f"   ⏳ Ожидает: {stats['pending']}",
     ]
 
     by_tariff = await db.count_approved_by_tariff()
     if by_tariff:
-        parts = [
-            f"{lang_name(t, 'ru')}: {by_tariff.get(t['id'], 0)}"
-            for t in TARIFFS
-            if by_tariff.get(t["id"])
-        ]
-        if parts:
-            lines.append("Одобрено по тарифам: " + ", ".join(parts))
+        lines.append("\n━━━━━━━━━━━━━━━━━━━━")
+        lines.append("📦 <b>По тарифам:</b>")
+        for tf in TARIFFS:
+            count = by_tariff.get(tf["id"], 0)
+            if count:
+                lines.append(f"   {tf['emoji']} {lang_name(tf, 'ru')}: <b>{count}</b>")
 
     active = await db.list_active_subscriptions()
-    lines.append(f"\n🟢 Активные подписки: {len(active)}")
+    lines.append(f"\n━━━━━━━━━━━━━━━━━━━━")
+    lines.append(f"🟢 <b>Активные подписки:</b> {len(active)}")
     for row in active[:20]:
         username = f" @{row['username']}" if row["username"] else ""
         tariff = TARIFFS_BY_ID.get(row["tariff_id"])
         tariff_name = lang_name(tariff, "ru") if tariff else row["tariff_id"]
-        lines.append(f"• ID {row['user_id']}{username} — {tariff_name} — до {row['expires_at'][:10]}")
+        lines.append(f"  • <code>{row['user_id']}</code>{username} — {tariff_name} — до {row['expires_at'][:10]}")
 
     recent = await db.recent_payments(10)
     if recent:
-        lines.append("\n🧾 Последние платежи:")
+        lines.append("\n━━━━━━━━━━━━━━━━━━━━")
+        lines.append("🧾 <b>Последние платежи:</b>")
         for row in recent:
             username = f" @{row['username']}" if row["username"] else ""
             tariff = TARIFFS_BY_ID.get(row["tariff_id"])
             tariff_name = lang_name(tariff, "ru") if tariff else row["tariff_id"]
+            emoji = STATUS_EMOJI.get(row["status"], "")
             lines.append(
-                f"• #{row['id']} ID {row['user_id']}{username} — {tariff_name} — "
-                f"{STATUS_EMOJI.get(row['status'], '')} — {row['created_at'][:16]}"
+                f"  {emoji} #{row['id']} <code>{row['user_id']}</code>{username}\n"
+                f"     {tariff_name} — {row['created_at'][:16]}"
             )
 
     text = "\n".join(lines)
@@ -192,6 +251,21 @@ async def admin_stats_text() -> str:
 
 
 # ==================== Флоу юзера ====================
+
+@dp.callback_query(F.data == "noop")
+async def on_noop(call: CallbackQuery) -> None:
+    """Пустая кнопка — текущий язык, ничего не делать."""
+    await call.answer()
+
+
+@dp.callback_query(F.data == "restart")
+async def on_restart(call: CallbackQuery) -> None:
+    """Кнопка «🏠 /start» — начать заново."""
+    lang = await db.get_lang(call.from_user.id)
+    await call.message.answer(t(lang, "welcome"))
+    await call.message.answer(t(lang, "choose_lang"), reply_markup=kb_language(lang))
+    await call.answer()
+
 
 @dp.callback_query(F.data == "switch_lang")
 async def switch_language(call: CallbackQuery) -> None:
@@ -227,6 +301,8 @@ async def on_tariff(call: CallbackQuery) -> None:
         name=lang_name(tariff, lang),
         price=format_price(tariff),
         duration=lang_duration(tariff, lang),
+        emoji=tariff["emoji"],
+        desc=lang_desc(tariff, lang),
     )
     await safe_edit(call.message, text, kb_tariff_detail(lang, tariff["id"]))
     await call.answer()
@@ -287,6 +363,8 @@ async def back_to_tariff(call: CallbackQuery) -> None:
         name=lang_name(tariff, lang),
         price=format_price(tariff),
         duration=lang_duration(tariff, lang),
+        emoji=tariff["emoji"],
+        desc=lang_desc(tariff, lang),
     )
     await safe_edit(call.message, text, kb_tariff_detail(lang, tariff["id"]))
     await call.answer()
@@ -317,7 +395,7 @@ async def handle_receipt(message: Message, bot: Bot) -> None:
 async def notify_admins_receipt(bot: Bot, message: Message, payment_id: int, tariff: dict) -> None:
     """Пересылка квитанции всем админам с кнопками решения."""
     user = message.from_user
-    username = ADMIN_TEXTS["username_fmt"].format(username=user.username) if user.username else ""
+    username = ADMIN_TEXTS["username_fmt"].format(username=user.username, user_id=user.id) if user.username else ""
     active = await db.get_active_payment(user.id)
     active_note = ""
     if active:
@@ -428,7 +506,6 @@ async def admin_sticker_helper(message: Message) -> None:
         return  # чужие стикеры молча игнорируем
     await message.answer(
         ADMIN_TEXTS["sticker_hint"].format(file_id=message.sticker.file_id),
-        parse_mode="HTML",
     )
 
 
@@ -464,7 +541,7 @@ async def main() -> None:
         log.warning("ADMIN_IDS не заданы — квитанции некому пересылать! Заполните в config.py")
 
     await db.init_db()
-    bot = Bot(token=BOT_TOKEN)
+    bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
     log.info("Бот запущен. Админы: %s", ADMIN_IDS or "не заданы")
     await dp.start_polling(bot)
 
